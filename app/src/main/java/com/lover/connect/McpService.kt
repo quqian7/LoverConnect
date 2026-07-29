@@ -28,6 +28,7 @@ import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 
 class McpService : Service(), SensorEventListener {
 
@@ -1047,12 +1048,14 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
             val now = Instant.now()
             val oneHourAgo = now.minusSeconds(3600)
             val response = runBlocking {
-                client.readRecords(
-                    ReadRecordsRequest(
-                        HeartRateRecord::class,
-                        timeRangeFilter = TimeRangeFilter.between(oneHourAgo, now)
+                withTimeout(8000L) {
+                    client.readRecords(
+                        ReadRecordsRequest(
+                            HeartRateRecord::class,
+                            timeRangeFilter = TimeRangeFilter.between(oneHourAgo, now)
+                        )
                     )
-                )
+                }
             }
             if (response.records.isEmpty()) return "最近1小时无心率数据"
             val latest = response.records.last()
