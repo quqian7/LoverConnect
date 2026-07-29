@@ -1095,27 +1095,45 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
             val scanner = adapter.bluetoothLeScanner ?: return "BLE扫描不可用"
 
             var foundDevice: BluetoothDevice? = null
-            val scanLatch = CountDownLatch(1)
 
-            val scanCb = object : ScanCallback() {
+            // 第一阶段：按标准 Heart Rate Service UUID 扫
+            val latch1 = CountDownLatch(1)
+            val cb1 = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
                     foundDevice = result.device
                     try { scanner.stopScan(this) } catch (_: Exception) {}
-                    scanLatch.countDown()
+                    latch1.countDown()
                 }
             }
+            scanner.startScan(listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(HR_SERVICE_UUID)).build()), ScanSettings.Builder().build(), cb1)
+            latch1.await(4, TimeUnit.SECONDS)
+            try { scanner.stopScan(cb1) } catch (_: Exception) {}
 
-            val filter = ScanFilter.Builder()
-                .setServiceUuid(ParcelUuid(HR_SERVICE_UUID))
-                .build()
-            scanner.startScan(listOf(filter), ScanSettings.Builder().build(), scanCb)
-            val found = scanLatch.await(6, TimeUnit.SECONDS)
-            try { scanner.stopScan(scanCb) } catch (_: Exception) {}
+            // 第二阶段：没找到则扫所有设备，按设备名过滤
+            if (foundDevice == null) {
+                val latch2 = CountDownLatch(1)
+                val cb2 = object : ScanCallback() {
+                    override fun onScanResult(callbackType: Int, result: ScanResult) {
+                        val name = result.device.name ?: ""
+                        if (name.isNotBlank() && (name.contains("Band", ignoreCase = true) ||
+                            name.contains("MI", ignoreCase = true) ||
+                            name.contains("手环", ignoreCase = true))) {
+                            foundDevice = result.device
+                            try { scanner.stopScan(this) } catch (_: Exception) {}
+                            latch2.countDown()
+                        }
+                    }
+                }
+                scanner.startScan(cb2)
+                latch2.await(5, TimeUnit.SECONDS)
+                try { scanner.stopScan(cb2) } catch (_: Exception) {}
+            }
 
-            if (!found || foundDevice == null) return "未找到心率广播（确认手环已开启心率广播）"
+            if (foundDevice == null) return "未扫到手环（确认蓝牙已开且手环在附近）"
 
             val resultLatch = CountDownLatch(1)
             var bpm = -1
+            var noHrsService = false
 
             val gattCb = object : BluetoothGattCallback() {
                 override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -1126,7 +1144,7 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
                 override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
                     val char = gatt.getService(HR_SERVICE_UUID)?.getCharacteristic(HR_MEASUREMENT_UUID)
                     if (char != null) gatt.readCharacteristic(char)
-                    else { gatt.disconnect(); gatt.close(); resultLatch.countDown() }
+                    else { noHrsService = true; gatt.disconnect(); gatt.close(); resultLatch.countDown() }
                 }
 
                 override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
@@ -1151,7 +1169,11 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
             foundDevice!!.connectGatt(this, false, gattCb, BluetoothDevice.TRANSPORT_LE)
             resultLatch.await(10, TimeUnit.SECONDS)
 
-            if (bpm > 0) "心率：${bpm}bpm（BLE实时）" else "BLE连接成功但无心率值"
+            when {
+                bpm > 0 -> "心率：${bpm}bpm（BLE实时）"
+                noHrsService -> "找到手环但不支持标准心率广播，需在手环设置里开启\"心率广播\""
+                else -> "BLE连接失败或超时"
+            }
         } catch (e: SecurityException) {
             "缺少蓝牙权限"
         } catch (e: Exception) {
