@@ -18,9 +18,19 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file(System.getenv("KEYSTORE_PATH") ?: "lc.keystore")
+            storePassword = System.getenv("KEYSTORE_STOREPASS") ?: "limerence614"
+            keyAlias = System.getenv("KEYSTORE_ALIAS") ?: "loverconnect"
+            keyPassword = System.getenv("KEYSTORE_KEYPASS") ?: "limerence614"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
