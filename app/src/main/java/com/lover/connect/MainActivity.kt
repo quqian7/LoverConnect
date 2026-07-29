@@ -28,6 +28,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.health.connect.client.PermissionController
+import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.HeartRateRecord
 import com.lover.connect.ui.theme.LoverConnectTheme
 import org.json.JSONArray
 import org.json.JSONObject
@@ -38,6 +41,14 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
+    ) {}
+
+    private val healthPermissions = setOf(
+        HealthPermission.getReadPermission(HeartRateRecord::class)
+    )
+
+    private val requestHealthPermissions = registerForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
     ) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,14 +63,18 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             LoverConnectTheme {
-                MainScreen()
+                MainScreen(
+                    onRequestHealthPermission = {
+                        requestHealthPermissions.launch(healthPermissions)
+                    }
+                )
             }
         }
     }
 }
 
 @Composable
-fun MainScreen() {
+fun MainScreen(onRequestHealthPermission: () -> Unit = {}) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("lc_config", Context.MODE_PRIVATE)
     val scrollState = rememberScrollState()
@@ -267,6 +282,10 @@ fun MainScreen() {
             context.startActivity(intent)
         }, modifier = Modifier.fillMaxWidth()) {
             Text("通知使用权（音乐感知必需）")
+        }
+
+        OutlinedButton(onClick = onRequestHealthPermission, modifier = Modifier.fillMaxWidth()) {
+            Text("健康数据权限（心率必需）")
         }
 
         HorizontalDivider()
