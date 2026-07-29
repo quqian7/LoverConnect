@@ -22,6 +22,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.request.ReadRecordsRequest
+import androidx.health.connect.client.time.TimeRangeFilter
+import java.time.Instant
+import kotlinx.coroutines.runBlocking
 
 class McpService : Service(), SensorEventListener {
 
@@ -358,6 +364,11 @@ class McpService : Service(), SensorEventListener {
                     })
                 })
             })
+            put(JSONObject().apply {
+                put("name", "get_heart_rate")
+                put("description", "获取最近一次心率数据（来自Health Connect）")
+                put("inputSchema", JSONObject().apply { put("type", "object"); put("properties", JSONObject()) })
+            })
         }
 
         return JSONObject().apply {
@@ -389,6 +400,7 @@ class McpService : Service(), SensorEventListener {
             "get_now_playing" -> toolGetNowPlaying()
             "take_screenshot" -> toolTakeScreenshot()
             "read_eyes_log" -> toolReadEyesLog(args)
+            "get_heart_rate" -> toolGetHeartRate()
             else -> "未知工具：$toolName"
         }
 
@@ -1029,6 +1041,30 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
         if (allLines.isEmpty()) return "暂无日记"
         return allLines.takeLast(lines).joinToString("\n")
     }
+    private fun toolGetHeartRate(): String {
+        return try {
+            val client = HealthConnectClient.getOrCreate(this)
+            val now = Instant.now()
+            val oneHourAgo = now.minusSeconds(3600)
+            val response = runBlocking {
+                client.readRecords(
+                    ReadRecordsRequest(
+                        HeartRateRecord::class,
+                        timeRangeFilter = TimeRangeFilter.between(oneHourAgo, now)
+                    )
+                )
+            }
+            if (response.records.isEmpty()) return "最近1小时无心率数据"
+            val latest = response.records.last()
+            val bpm = latest.samples.lastOrNull()?.beatsPerMinute ?: 0L
+            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault())
+                .format(Date(latest.endTime.toEpochMilli()))
+            "心率：${bpm}bpm（${timeStr}）"
+        } catch (e: Exception) {
+            "获取心率失败：${e.message}"
+        }
+    }
+
 // ==================== 辅助方法 ====================
 
     private fun getAppName(pkg: String): String {
