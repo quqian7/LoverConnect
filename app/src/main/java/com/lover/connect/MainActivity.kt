@@ -288,6 +288,20 @@ fun MainScreen(onRequestHealthPermission: () -> Unit = {}) {
             Text("健康数据权限（心率必需）")
         }
 
+        val bluetoothPermLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) {}
+        OutlinedButton(onClick = {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                bluetoothPermLauncher.launch(arrayOf(
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ))
+            }
+        }, modifier = Modifier.fillMaxWidth()) {
+            Text("蓝牙权限（心率BLE必需）")
+        }
+
         HorizontalDivider()
 
 // ===== 小L配置 =====

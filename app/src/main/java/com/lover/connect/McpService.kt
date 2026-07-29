@@ -29,6 +29,19 @@ import androidx.health.connect.client.time.TimeRangeFilter
 import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.os.ParcelUuid
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class McpService : Service(), SensorEventListener {
 
@@ -1042,7 +1055,13 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
         if (allLines.isEmpty()) return "暂无日记"
         return allLines.takeLast(lines).joinToString("\n")
     }
+    private val HR_SERVICE_UUID = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
+    private val HR_MEASUREMENT_UUID = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
+
     private fun toolGetHeartRate(): String {
+        val bleResult = toolGetHeartRateBle()
+        if (bleResult.startsWith("心率：")) return bleResult
+
         return try {
             val client = HealthConnectClient.getOrCreate(this)
             val now = Instant.now()
@@ -1065,6 +1084,78 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
             "心率：${bpm}bpm（${timeStr}）"
         } catch (e: Exception) {
             "获取心率失败：${e.message}"
+        }
+    }
+
+    private fun toolGetHeartRateBle(): String {
+        return try {
+            val bm = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+            val adapter = bm.adapter ?: return "BLE不可用"
+            if (!adapter.isEnabled) return "蓝牙未开启"
+            val scanner = adapter.bluetoothLeScanner ?: return "BLE扫描不可用"
+
+            var foundDevice: BluetoothDevice? = null
+            val scanLatch = CountDownLatch(1)
+
+            val scanCb = object : ScanCallback() {
+                override fun onScanResult(callbackType: Int, result: ScanResult) {
+                    foundDevice = result.device
+                    try { scanner.stopScan(this) } catch (_: Exception) {}
+                    scanLatch.countDown()
+                }
+            }
+
+            val filter = ScanFilter.Builder()
+                .setServiceUuid(ParcelUuid(HR_SERVICE_UUID))
+                .build()
+            scanner.startScan(listOf(filter), ScanSettings.Builder().build(), scanCb)
+            val found = scanLatch.await(6, TimeUnit.SECONDS)
+            try { scanner.stopScan(scanCb) } catch (_: Exception) {}
+
+            if (!found || foundDevice == null) return "未找到心率广播（确认手环已开启心率广播）"
+
+            val resultLatch = CountDownLatch(1)
+            var bpm = -1
+
+            val gattCb = object : BluetoothGattCallback() {
+                override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                    if (newState == BluetoothProfile.STATE_CONNECTED) gatt.discoverServices()
+                    else { gatt.close(); resultLatch.countDown() }
+                }
+
+                override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                    val char = gatt.getService(HR_SERVICE_UUID)?.getCharacteristic(HR_MEASUREMENT_UUID)
+                    if (char != null) gatt.readCharacteristic(char)
+                    else { gatt.disconnect(); gatt.close(); resultLatch.countDown() }
+                }
+
+                override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+                    if (status == BluetoothGatt.GATT_SUCCESS && value.size >= 2) {
+                        bpm = if (value[0].toInt() and 0x01 == 0) value[1].toInt() and 0xFF
+                              else (value[1].toInt() and 0xFF) or ((value[2].toInt() and 0xFF) shl 8)
+                    }
+                    gatt.disconnect(); gatt.close(); resultLatch.countDown()
+                }
+
+                @Suppress("DEPRECATION")
+                override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+                    val value = characteristic.value ?: byteArrayOf()
+                    if (status == BluetoothGatt.GATT_SUCCESS && value.size >= 2) {
+                        bpm = if (value[0].toInt() and 0x01 == 0) value[1].toInt() and 0xFF
+                              else (value[1].toInt() and 0xFF) or ((value[2].toInt() and 0xFF) shl 8)
+                    }
+                    gatt.disconnect(); gatt.close(); resultLatch.countDown()
+                }
+            }
+
+            foundDevice!!.connectGatt(this, false, gattCb, BluetoothDevice.TRANSPORT_LE)
+            resultLatch.await(10, TimeUnit.SECONDS)
+
+            if (bpm > 0) "心率：${bpm}bpm（BLE实时）" else "BLE连接成功但无心率值"
+        } catch (e: SecurityException) {
+            "缺少蓝牙权限"
+        } catch (e: Exception) {
+            "BLE错误：${e.message}"
         }
     }
 
