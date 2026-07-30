@@ -39,6 +39,8 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.location.Location
+import android.location.LocationManager
 import android.os.ParcelUuid
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -383,6 +385,11 @@ class McpService : Service(), SensorEventListener {
                 put("description", "获取最近一次心率数据（来自Health Connect）")
                 put("inputSchema", JSONObject().apply { put("type", "object"); put("properties", JSONObject()) })
             })
+            put(JSONObject().apply {
+                put("name", "get_location")
+                put("description", "获取当前位置（经纬度）")
+                put("inputSchema", JSONObject().apply { put("type", "object"); put("properties", JSONObject()) })
+            })
         }
 
         return JSONObject().apply {
@@ -415,6 +422,7 @@ class McpService : Service(), SensorEventListener {
             "take_screenshot" -> toolTakeScreenshot()
             "read_eyes_log" -> toolReadEyesLog(args)
             "get_heart_rate" -> toolGetHeartRate()
+            "get_location" -> toolGetLocation()
             else -> "未知工具：$toolName"
         }
 
@@ -1178,6 +1186,33 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
             "缺少蓝牙权限"
         } catch (e: Exception) {
             "BLE错误：${e.message}"
+        }
+    }
+
+    private fun toolGetLocation(): String {
+        return try {
+            val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val providers = lm.getProviders(true)
+            var best: Location? = null
+            for (provider in providers) {
+                try {
+                    val loc = lm.getLastKnownLocation(provider) ?: continue
+                    if (best == null || loc.accuracy < best.accuracy) best = loc
+                } catch (_: SecurityException) {}
+            }
+            if (best == null) {
+                "暂无定位缓存，请先打开地图app获取一次定位"
+            } else {
+                val lat = "%.6f".format(best.latitude)
+                val lng = "%.6f".format(best.longitude)
+                val acc = "%.0f".format(best.accuracy)
+                val age = (System.currentTimeMillis() - best.time) / 60000
+                "纬度：$lat\n经度：$lng\n精度：±${acc}m\n更新：${age}分钟前"
+            }
+        } catch (e: SecurityException) {
+            "缺少定位权限，请在系统设置中允许LoverConnect访问位置"
+        } catch (e: Exception) {
+            "获取定位失败：${e.message}"
         }
     }
 
