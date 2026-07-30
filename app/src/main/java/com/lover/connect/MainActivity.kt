@@ -311,6 +311,15 @@ fun MainScreen(onRequestHealthPermission: () -> Unit = {}) {
             Text("蓝牙权限（心率BLE必需）")
         }
 
+        val locationPermLauncher2 = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) {}
+        OutlinedButton(onClick = {
+            locationPermLauncher2.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }, modifier = Modifier.fillMaxWidth()) {
+            Text("位置权限（定位必需）")
+        }
+
         HorizontalDivider()
 
 // ===== 小L配置 =====
