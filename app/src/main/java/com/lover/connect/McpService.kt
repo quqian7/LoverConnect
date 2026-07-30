@@ -40,7 +40,9 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
+import android.os.HandlerThread
 import android.os.ParcelUuid
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -1192,25 +1194,57 @@ ${if (personality.isNotEmpty()) "- $personality" else ""}
     private fun toolGetLocation(): String {
         return try {
             val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val providers = lm.getProviders(true)
-            var best: Location? = null
-            for (provider in providers) {
+
+            // 先读缓存，5分钟内的直接用
+            var cached: Location? = null
+            for (provider in lm.getProviders(true)) {
                 try {
                     val loc = lm.getLastKnownLocation(provider) ?: continue
-                    if (best == null || loc.accuracy < best.accuracy) best = loc
+                    if (cached == null || loc.accuracy < cached.accuracy) cached = loc
                 } catch (_: SecurityException) {}
             }
-            if (best == null) {
-                "暂无定位缓存，请先打开地图app获取一次定位"
+            val cacheAge = cached?.let { (System.currentTimeMillis() - it.time) / 60000 } ?: Long.MAX_VALUE
+            if (cached != null && cacheAge < 5) {
+                return "纬度：${"%.6f".format(cached.latitude)}\n经度：${"%.6f".format(cached.longitude)}\n精度：±${"%.0f".format(cached.accuracy)}m\n更新：${cacheAge}分钟前"
+            }
+
+            // 缓存太旧或没有，主动发起一次定位，最多等10秒
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var fresh: Location? = null
+            val ht = HandlerThread("lc_location").also { it.start() }
+            val listener = LocationListener { loc ->
+                if (fresh == null || loc.accuracy < fresh!!.accuracy) fresh = loc
+                latch.countDown()
+            }
+            val activeProvider = when {
+                lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                else -> null
+            }
+            if (activeProvider != null) {
+                try {
+                    android.os.Handler(ht.looper).post {
+                        try {
+                            lm.requestSingleUpdate(activeProvider, listener, ht.looper)
+                        } catch (_: SecurityException) { latch.countDown() }
+                    }
+                } catch (_: Exception) { latch.countDown() }
             } else {
-                val lat = "%.6f".format(best.latitude)
-                val lng = "%.6f".format(best.longitude)
-                val acc = "%.0f".format(best.accuracy)
-                val age = (System.currentTimeMillis() - best.time) / 60000
-                "纬度：$lat\n经度：$lng\n精度：±${acc}m\n更新：${age}分钟前"
+                latch.countDown()
+            }
+            latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            ht.quitSafely()
+
+            val result = fresh ?: cached
+            if (result == null) {
+                "暂无定位，请打开地图app获取一次位置后重试"
+            } else {
+                val age = (System.currentTimeMillis() - result.time) / 60000
+                val src = if (fresh != null) "实时" else "缓存"
+                "纬度：${"%.6f".format(result.latitude)}\n经度：${"%.6f".format(result.longitude)}\n精度：±${"%.0f".format(result.accuracy)}m\n更新：${age}分钟前（$src）"
             }
         } catch (e: SecurityException) {
-            "缺少定位权限，请在系统设置中允许LoverConnect访问位置"
+            "缺少定位权限，请在权限管理页面点「位置权限」授权"
         } catch (e: Exception) {
             "获取定位失败：${e.message}"
         }
